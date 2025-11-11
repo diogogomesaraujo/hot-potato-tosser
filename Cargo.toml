@@ -1,0 +1,16 @@
+[package]
+name = "token_ring"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# serialization
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.139"
+
+# async runtime
+futures = "0.3.31"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1.17"
+tokio-util = { version = "0.7.14", features = ["full"] }
