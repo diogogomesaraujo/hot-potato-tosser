@@ -2,15 +2,15 @@ use color_print::cprintln;
 use terminal_size::{terminal_size, Height};
 
 pub fn warning(message: &str) {
-    cprintln!("<yellow, bold>WARNING:</yellow, bold>    {}", message);
+    cprintln!("<yellow, bold>WARNING:</yellow, bold>  {}", message);
 }
 
 pub fn info(message: &str) {
-    cprintln!("<green, bold>INFO:</green, bold>    {}", message);
+    cprintln!("<green, bold>INFO:</green, bold>     {}", message);
 }
 
 pub fn debug(message: &str) {
-    cprintln!("<cyan, bold>DEBUG:</cyan, bold>    {}", message);
+    cprintln!("<bold>DEBUG:</bold>    {}", message);
 }
 
 pub fn error(message: &str) {

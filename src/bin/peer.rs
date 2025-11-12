@@ -28,10 +28,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     loop {
-        if let Err(e) = peer.run().await {
-            eprintln!("{e}");
-        }
-        println!("new cicle...");
+        peer.run().await;
         sleep(Duration::from_secs(5)).await;
     }
 }

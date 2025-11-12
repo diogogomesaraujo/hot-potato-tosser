@@ -1,11 +1,9 @@
 use crate::*;
-use color_print::cformat;
 use futures::{SinkExt, StreamExt};
-use std::{collections::VecDeque, error::Error, sync::Arc, time::Duration};
+use std::{collections::VecDeque, error::Error, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify},
-    time::sleep,
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -22,12 +20,14 @@ pub struct Peer {
 
 impl Peer {
     pub fn new(address: String, server_address: String, next_peer_address: String) -> Self {
+        let mut rng = rand::rng();
+
         Self {
             address,
             server_address,
             next_peer_address,
             hot_potato_state: HotPotatoState::NotHolding,
-            request_queue: RequestQueue::from([Request::Add(5, 6)]),
+            request_queue: RequestQueue::from([Request::generate(&mut rng)]),
         }
     }
 
@@ -39,42 +39,66 @@ impl Peer {
         let mut previous_peer_lines = Framed::new(previous_peer_stream, LinesCodec::new());
 
         loop {
-            tokio::select! {
-                Some(Ok(hot_potato_string)) = previous_peer_lines.next() => {
-                    if let Ok(hot_potato) =  HotPotato::from_json_string(&hot_potato_string) {
-                        // get hold of hot potato
-                        {
-                            let mut current_peer_server = current_peer_server.lock().await;
-                            current_peer_server.hot_potato_state = HotPotatoState::Holding(hot_potato);
-                            holding_hot_potato_notify.notify_one();
-                        }
-
-                        log::debug(&cformat!("Currently holding <yellow, bold>hot potato</yellow, bold>"));
+            if let Some(Ok(hot_potato_string)) = previous_peer_lines.next().await {
+                if let Ok(hot_potato) = HotPotato::from_json_string(&hot_potato_string) {
+                    // get hold of hot potato
+                    {
+                        let mut current_peer_server = current_peer_server.lock().await;
+                        current_peer_server.hot_potato_state = HotPotatoState::Holding(hot_potato);
+                        holding_hot_potato_notify.notify_one();
                     }
+
+                    /*log::debug(&cformat!(
+                        "Currently holding <yellow, bold>hot potato</yellow, bold>"
+                    )); */
                 }
             }
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn run(&mut self) {
         // client connections
-        let server_stream = TcpStream::connect(&self.server_address).await?;
+        let server_stream = match TcpStream::connect(&self.server_address).await {
+            Ok(stream) => stream,
+            Err(_) => {
+                log::error("Failed to connect to the server.");
+                return;
+            }
+        };
         let mut server_lines = Framed::new(server_stream, LinesCodec::new());
 
         // open a server for previous Peer to connect
-        let previous_peer_listener = TcpListener::bind(&self.address).await?;
+        let previous_peer_listener = match TcpListener::bind(&self.address).await {
+            Ok(listener) => listener,
+            Err(_) => {
+                log::error("Couldn't open connection for the previous peer.");
+                return;
+            }
+        };
 
         // receive starting flag
         let _ = match server_lines.next().await {
-            Some(Ok(line)) if matches!(StartFlag::from_json_string(&line)?, StartFlag(_)) => {}
-            _ => return Err("Failed to receive starting flag".into()),
+            Some(Ok(line))
+                if matches!(
+                    StartFlag::from_json_string(&line).expect("(StartFlag) Shouldn't fail."),
+                    StartFlag(_)
+                ) => {}
+            _ => {
+                log::error("Couldn't receive the starting flag from the server.");
+            }
         };
 
         // create a thread-safe state instance
         let current_peer = Arc::new(Mutex::new(self.clone()));
 
         // connect to the next Peer's server
-        let next_peer_stream = TcpStream::connect(&self.next_peer_address).await?;
+        let next_peer_stream = match TcpStream::connect(&self.next_peer_address).await {
+            Ok(stream) => stream,
+            Err(_) => {
+                log::error("Couldn't connect to the next peer.");
+                return;
+            }
+        };
 
         let holding_hot_potato_notify = Arc::new(Notify::new());
         let (mut server_writer, mut server_reader) = server_lines.split::<String>();
@@ -89,11 +113,13 @@ impl Peer {
                     if let Some(Ok(msg)) = server_reader.next().await {
                         if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
                             let mut current_peer = current_peer.lock().await;
+
                             current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
                             holding_hot_potato_notify.notify_one();
-                            log::debug(&cformat!(
+
+                            /*log::debug(&cformat!(
                                 "Currently holding <yellow, bold>hot potato</yellow, bold>"
-                            ));
+                            ));*/
                         }
 
                         if let Ok(operation_response) = Response::from_json_string(&msg) {
@@ -156,7 +182,7 @@ impl Peer {
                                         .expect("Couldn't send operation request to server.");
                                 }
 
-                                sleep(Duration::from_secs(2)).await;
+                                // sleep(Duration::from_secs(2)).await;
                                 next_peer_lines
                                     .send(hot_potato_string)
                                     .await
@@ -169,10 +195,16 @@ impl Peer {
             })
         };
 
-        operation_server_thread.await?;
-        previous_peer_thread.await?;
-        calc_then_throw_hot_potato_thread.await?;
+        let generate_potato_work_thread = {};
 
-        Ok(())
+        if let Err(_) = operation_server_thread.await {
+            log::error("Operation Server Thread failded.");
+        }
+        if let Err(_) = previous_peer_thread.await {
+            log::error("Previous Peer Thread failded.");
+        }
+        if let Err(_) = calc_then_throw_hot_potato_thread.await {
+            log::error("Calculate then Throw Hot Potato Thread failded.");
+        }
     }
 }

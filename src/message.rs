@@ -1,4 +1,5 @@
 use color_print::cformat;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -34,7 +35,7 @@ pub enum Response {
     Sub(i32, i32, i32),
     Mul(i32, i32, i32),
     Div(i32, i32, i32),
-    Err(String),
+    Err(i32, i32, String),
 }
 
 impl StartFlag {
@@ -72,19 +73,45 @@ impl Request {
 
     pub fn to_response(&self) -> Response {
         match self {
-            Request::Add(a, b) => Response::Add(*a, *b, a + b),
-            Request::Sub(a, b) => Response::Sub(*a, *b, a - b),
-            Request::Mul(a, b) => Response::Mul(*a, *b, a * b),
-            Request::Div(a, b) => Response::Div(*a, *b, a / b),
+            Self::Add(a, b) => match a.checked_add(*b) {
+                Some(result) => Response::Add(*a, *b, result),
+                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            },
+            Self::Sub(a, b) => match a.checked_sub(*b) {
+                Some(result) => Response::Sub(*a, *b, result),
+                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            },
+            Self::Mul(a, b) => match a.checked_mul(*b) {
+                Some(result) => Response::Mul(*a, *b, result),
+                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            },
+            Self::Div(a, b) => match a.checked_div(*b) {
+                Some(result) => Response::Div(*a, *b, result),
+                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            },
         }
     }
 
     pub fn print(&self) {
         match self {
-            Request::Add(a, b) => log::info(&cformat!("Asking the server to perform the addition of <bold>{a}</bold> and <bold>{b}</bold>.")),
-            Request::Sub(a, b) => log::info(&cformat!("Asking the server to perform the subtraction of <bold>{a}</bold> and <bold>{b}</bold>.")),
-            Request::Mul(a, b) => log::info(&cformat!("Asking the server to perform the multiplication of <bold>{a}</bold> and <bold>{b}</bold>.")),
-            Request::Div(a, b) => log::info(&cformat!("Asking the server to perform the division of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Self::Add(a, b) => log::info(&cformat!("Asking the server to perform the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Self::Sub(a, b) => log::info(&cformat!("Asking the server to perform the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Self::Mul(a, b) => log::info(&cformat!("Asking the server to perform the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Self::Div(a, b) => log::info(&cformat!("Asking the server to perform the <bold>division of</bold> <bold>{a}</bold> and <bold>{b}</bold>.")),
+        }
+    }
+
+    pub fn generate<R: Rng + ?Sized>(rng: &mut R) -> Self {
+        let a = rng.random::<i32>();
+        let b = rng.random::<i32>();
+        let op = rng.random_range(0..4);
+
+        match op {
+            0 => Self::Add(a, b),
+            1 => Self::Sub(a, b),
+            2 => Self::Mul(a, b),
+            3 => Self::Div(a, b),
+            _ => Self::Add(0, 0), // shouldn't happen
         }
     }
 }
@@ -98,17 +125,13 @@ impl Response {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 
-    pub fn response_error(message: &str) -> Response {
-        Response::Err(message.to_string())
-    }
-
     pub fn print(&self) {
         match self {
             Response::Add(a, b, result) => log::info(&cformat!("The result of the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
             Response::Sub(a, b, result) => log::info(&cformat!("The result of the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
             Response::Mul(a, b, result) => log::info(&cformat!("The result of the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
             Response::Div(a, b, result) => log::info(&cformat!("The result of the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Response::Err(e) => log::error(e),
+            Response::Err(_, _, e) => log::error(e),
         }
     }
 }

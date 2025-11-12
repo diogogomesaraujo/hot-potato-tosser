@@ -34,7 +34,7 @@ impl Server {
         // wait for all participants to join
         barrier.wait().await;
 
-        log::info("Send start flag to peer.");
+        log::info(&cformat!("Send <bold>starting flag</bold> to peer."));
         writer.send(StartFlag(true).to_json_string()?).await?;
         writer.flush().await?;
 
@@ -56,10 +56,15 @@ impl Server {
                 Some(Ok(line)) = reader.next() => {
                     match serde_json::from_str::<Request>(&line) {
                         Ok(request) => {
-                            writer.send(request.to_response().to_json_string()?).await?;
+                            let response = request.to_response();
+
+                            request.print();
+                            response.print();
+
+                            writer.send(response.to_json_string()?).await?;
                         }
                         Err(_) => {
-                            writer.send(Response::response_error("The request received had incorrect formatting").to_json_string()?).await?;
+                            writer.send(Response::Err(0, 0, cformat!("The request had <bold>incorrect formatting</bold>.")).to_json_string()?).await?;
                         }
                     }
                 }
@@ -77,7 +82,7 @@ impl Server {
         loop {
             let (peer_stream, _peer_address) = listener.accept().await?;
 
-            log::info("Accepted a connection.");
+            log::info(&cformat!("Accepted a <bold>connection</bold>."));
 
             let server = server.clone();
             let barrier = barrier.clone();
