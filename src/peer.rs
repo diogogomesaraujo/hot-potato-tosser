@@ -1,9 +1,11 @@
 use crate::*;
 use futures::{SinkExt, StreamExt};
-use std::{collections::VecDeque, error::Error, sync::Arc};
+use rand::{rng, RngCore};
+use std::{collections::VecDeque, error::Error, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify},
+    time::sleep,
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -57,6 +59,8 @@ impl Peer {
     }
 
     pub async fn run(&mut self) {
+        let mut rng = rng();
+
         // client connections
         let server_stream = match TcpStream::connect(&self.server_address).await {
             Ok(stream) => stream,
@@ -195,7 +199,28 @@ impl Peer {
             })
         };
 
-        let generate_potato_work_thread = {};
+        let generate_potato_work_thread = {
+            let current_peer = current_peer.clone();
+
+            let mut seed: [u8; 32] = [0u8; 32];
+            rng.fill_bytes(&mut seed);
+
+            let mut poisson_process = Poisson::new(RATE, &mut seed);
+
+            tokio::spawn(async move {
+                loop {
+                    sleep(Duration::from_secs_f64(
+                        poisson_process.time_for_next_event(),
+                    ))
+                    .await;
+                    current_peer
+                        .lock()
+                        .await
+                        .request_queue
+                        .push_back(Request::generate(&mut poisson_process.rng));
+                }
+            })
+        };
 
         if let Err(_) = operation_server_thread.await {
             log::error("Operation Server Thread failded.");
@@ -205,6 +230,9 @@ impl Peer {
         }
         if let Err(_) = calc_then_throw_hot_potato_thread.await {
             log::error("Calculate then Throw Hot Potato Thread failded.");
+        }
+        if let Err(_) = generate_potato_work_thread.await {
+            log::error("Generate Potato Work Thread failded.");
         }
     }
 }
