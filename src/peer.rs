@@ -1,7 +1,7 @@
 use crate::*;
 use color_print::cformat;
 use futures::{SinkExt, StreamExt};
-use std::{error::Error, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::VecDeque, error::Error, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify},
@@ -9,12 +9,15 @@ use tokio::{
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
+pub type RequestQueue = VecDeque<Request>;
+
 #[derive(Clone)]
 pub struct Peer {
     pub address: String,
     pub server_address: String,
     pub next_peer_address: String,
     pub hot_potato_state: HotPotatoState,
+    pub request_queue: RequestQueue,
 }
 
 impl Peer {
@@ -24,12 +27,12 @@ impl Peer {
             server_address,
             next_peer_address,
             hot_potato_state: HotPotatoState::NotHolding,
+            request_queue: RequestQueue::from([Request::Add(5, 6)]),
         }
     }
 
     pub async fn handle_previous_peer(
         previous_peer_stream: TcpStream,
-        previous_peer_address: SocketAddr,
         current_peer_server: Arc<Mutex<Self>>,
         holding_hot_potato_notify: Arc<Notify>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -74,6 +77,7 @@ impl Peer {
         let next_peer_stream = TcpStream::connect(&self.next_peer_address).await?;
 
         let holding_hot_potato_notify = Arc::new(Notify::new());
+        let (mut server_writer, mut server_reader) = server_lines.split::<String>();
 
         // thread that handles the server connection
         let operation_server_thread = {
@@ -82,18 +86,18 @@ impl Peer {
 
             tokio::spawn(async move {
                 loop {
-                    tokio::select! {
-                        Some(Ok(msg)) = server_lines.next() => {
-                            if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
-                                let mut current_peer = current_peer.lock().await;
-                                current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
-                                holding_hot_potato_notify.notify_one();
-                                log::debug(&cformat!("Currently holding <yellow, bold>hot potato</yellow, bold>"));
-                            }
+                    if let Some(Ok(msg)) = server_reader.next().await {
+                        if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
+                            let mut current_peer = current_peer.lock().await;
+                            current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
+                            holding_hot_potato_notify.notify_one();
+                            log::debug(&cformat!(
+                                "Currently holding <yellow, bold>hot potato</yellow, bold>"
+                            ));
+                        }
 
-                            if let Ok(operation_response) = Response::from_json_string(&msg) {
-                                operation_response.print();
-                            }
+                        if let Ok(operation_response) = Response::from_json_string(&msg) {
+                            operation_response.print();
                         }
                     }
                 }
@@ -106,25 +110,24 @@ impl Peer {
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
 
             tokio::spawn(async move {
-                let (previous_peer_stream, previous_peer_address) = previous_peer_listener
+                let (previous_peer_stream, _previous_peer_address) = previous_peer_listener
                     .accept()
                     .await
                     .expect("Failed to accept the previous peer's connection.");
 
                 if let Err(e) = Self::handle_previous_peer(
                     previous_peer_stream,
-                    previous_peer_address,
                     current_peer,
                     holding_hot_potato_notify,
                 )
                 .await
                 {
-                    log::error("{e}");
+                    log::error(&format!("{e}"));
                 };
             })
         };
 
-        let throw_hot_potato_thread = {
+        let calc_then_throw_hot_potato_thread = {
             let current_peer = Arc::clone(&current_peer);
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
 
@@ -135,10 +138,24 @@ impl Peer {
                     holding_hot_potato_notify.notified().await;
                     {
                         let mut current_peer = current_peer.lock().await;
-                        if let (HotPotatoState::Holding(hot_potato)) =
-                            &current_peer.hot_potato_state
+                        if let HotPotatoState::Holding(hot_potato) = &current_peer.hot_potato_state
                         {
                             if let Ok(hot_potato_string) = hot_potato.to_json_string() {
+                                // send all operations request to server
+                                while let Some(operation_request) =
+                                    current_peer.request_queue.pop_front()
+                                {
+                                    operation_request.print();
+                                    server_writer
+                                        .send(
+                                            operation_request
+                                                .to_json_string()
+                                                .expect("Couldn't parse operation request."),
+                                        )
+                                        .await
+                                        .expect("Couldn't send operation request to server.");
+                                }
+
                                 sleep(Duration::from_secs(2)).await;
                                 next_peer_lines
                                     .send(hot_potato_string)
@@ -154,7 +171,7 @@ impl Peer {
 
         operation_server_thread.await?;
         previous_peer_thread.await?;
-        throw_hot_potato_thread.await?;
+        calc_then_throw_hot_potato_thread.await?;
 
         Ok(())
     }

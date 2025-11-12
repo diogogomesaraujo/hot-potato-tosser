@@ -1,6 +1,9 @@
+use color_print::cformat;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use tokio::sync::mpsc;
+
+use crate::log;
 
 pub type HotPotatoTx = mpsc::UnboundedSender<HotPotato>;
 pub type HotPotatoRx = mpsc::UnboundedReceiver<HotPotato>;
@@ -27,7 +30,10 @@ pub enum Request {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Response {
-    Ok { value: String, r#type: String },
+    Add(i32, i32, i32),
+    Sub(i32, i32, i32),
+    Mul(i32, i32, i32),
+    Div(i32, i32, i32),
     Err(String),
 }
 
@@ -63,6 +69,24 @@ impl Request {
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
+
+    pub fn to_response(&self) -> Response {
+        match self {
+            Request::Add(a, b) => Response::Add(*a, *b, a + b),
+            Request::Sub(a, b) => Response::Sub(*a, *b, a - b),
+            Request::Mul(a, b) => Response::Mul(*a, *b, a * b),
+            Request::Div(a, b) => Response::Div(*a, *b, a / b),
+        }
+    }
+
+    pub fn print(&self) {
+        match self {
+            Request::Add(a, b) => log::info(&cformat!("Asking the server to perform the addition of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Request::Sub(a, b) => log::info(&cformat!("Asking the server to perform the subtraction of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Request::Mul(a, b) => log::info(&cformat!("Asking the server to perform the multiplication of <bold>{a}</bold> and <bold>{b}</bold>.")),
+            Request::Div(a, b) => log::info(&cformat!("Asking the server to perform the division of <bold>{a}</bold> and <bold>{b}</bold>.")),
+        }
+    }
 }
 
 impl Response {
@@ -74,5 +98,17 @@ impl Response {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 
-    pub fn print(&self) {}
+    pub fn response_error(message: &str) -> Response {
+        Response::Err(message.to_string())
+    }
+
+    pub fn print(&self) {
+        match self {
+            Response::Add(a, b, result) => log::info(&cformat!("The result of the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Response::Sub(a, b, result) => log::info(&cformat!("The result of the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Response::Mul(a, b, result) => log::info(&cformat!("The result of the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Response::Div(a, b, result) => log::info(&cformat!("The result of the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Response::Err(e) => log::error(e),
+        }
+    }
 }

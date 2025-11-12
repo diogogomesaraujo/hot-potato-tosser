@@ -1,11 +1,10 @@
 use crate::*;
 use color_print::cformat;
 use futures::{SinkExt, StreamExt};
-use std::{error::Error, net::SocketAddr, sync::Arc, time::Duration};
+use std::{error::Error, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Barrier, Mutex},
-    time::sleep,
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -13,10 +12,6 @@ use tokio_util::codec::{Framed, LinesCodec};
 pub struct Server {
     pub own_address: String,
     pub number_of_peers: usize,
-}
-
-pub struct PeerConnecton {
-    pub address: SocketAddr,
 }
 
 impl Server {
@@ -29,7 +24,6 @@ impl Server {
 
     async fn handle(
         stream: TcpStream,
-        address: SocketAddr,
         _server: Arc<Mutex<Self>>,
         barrier: Arc<Barrier>,
         starts_with_hot_potato: Arc<Mutex<bool>>,
@@ -37,12 +31,10 @@ impl Server {
         let lines = Framed::new(stream, LinesCodec::new());
         let (mut writer, mut reader) = lines.split::<String>();
 
-        let mut participant = PeerConnecton { address };
-
         // wait for all participants to join
         barrier.wait().await;
 
-        log::info("send start flag to peer.");
+        log::info("Send start flag to peer.");
         writer.send(StartFlag(true).to_json_string()?).await?;
         writer.flush().await?;
 
@@ -60,7 +52,18 @@ impl Server {
         }
 
         loop {
-            sleep(Duration::from_secs(5)).await;
+            tokio::select! {
+                Some(Ok(line)) = reader.next() => {
+                    match serde_json::from_str::<Request>(&line) {
+                        Ok(request) => {
+                            writer.send(request.to_response().to_json_string()?).await?;
+                        }
+                        Err(_) => {
+                            writer.send(Response::response_error("The request received had incorrect formatting").to_json_string()?).await?;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -72,7 +75,7 @@ impl Server {
         let starts_with_hot_potato = Arc::new(Mutex::new(true));
 
         loop {
-            let (peer_stream, peer_address) = listener.accept().await?;
+            let (peer_stream, _peer_address) = listener.accept().await?;
 
             log::info("Accepted a connection.");
 
@@ -81,16 +84,10 @@ impl Server {
             let starts_with_hot_potato = starts_with_hot_potato.clone();
 
             let _handle = tokio::spawn(async move {
-                if let Err(e) = Self::handle(
-                    peer_stream,
-                    peer_address,
-                    server,
-                    barrier,
-                    starts_with_hot_potato,
-                )
-                .await
+                if let Err(e) =
+                    Self::handle(peer_stream, server, barrier, starts_with_hot_potato).await
                 {
-                    log::error("{e}");
+                    log::error(&format!("{e}"));
                 };
             });
         }
