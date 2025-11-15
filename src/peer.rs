@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
-pub type RequestQueue = VecDeque<Request>;
+pub type RequestQueue = VecDeque<ServerRequest>;
 
 #[derive(Clone)]
 pub struct Peer {
@@ -29,7 +29,7 @@ impl Peer {
             server_address,
             next_peer_address,
             hot_potato_state: HotPotatoState::NotHolding,
-            request_queue: RequestQueue::from([Request::generate(&mut rng)]),
+            request_queue: RequestQueue::from([ServerRequest::generate(&mut rng)]),
         }
     }
 
@@ -126,7 +126,7 @@ impl Peer {
                             ));*/
                         }
 
-                        if let Ok(operation_response) = Response::from_json_string(&msg) {
+                        if let Ok(operation_response) = ServerResponse::from_json_string(&msg) {
                             operation_response.print();
                         }
                     }
@@ -217,7 +217,7 @@ impl Peer {
                         .lock()
                         .await
                         .request_queue
-                        .push_back(Request::generate(&mut poisson_process.rng));
+                        .push_back(ServerRequest::generate(&mut poisson_process.rng));
                 }
             })
         };

@@ -54,7 +54,7 @@ impl Server {
         loop {
             tokio::select! {
                 Some(Ok(line)) = reader.next() => {
-                    match serde_json::from_str::<Request>(&line) {
+                    match serde_json::from_str::<ServerRequest>(&line) {
                         Ok(request) => {
                             let response = request.to_response();
 
@@ -64,7 +64,7 @@ impl Server {
                             writer.send(response.to_json_string()?).await?;
                         }
                         Err(_) => {
-                            writer.send(Response::Err(0, 0, cformat!("The request had <bold>incorrect formatting</bold>.")).to_json_string()?).await?;
+                            writer.send(ServerResponse::Err(0, 0, cformat!("The request had <bold>incorrect formatting</bold>.")).to_json_string()?).await?;
                         }
                     }
                 }

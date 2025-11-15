@@ -13,6 +13,6 @@ impl Poisson<SmallRng> {
         }
     }
     pub fn time_for_next_event(&mut self) -> f64 {
-        -(1.0f64 - self.rng.random::<f64>()).log2() / self.rate
+        -(1.0f64 - self.rng.random::<f64>()).ln() / self.rate
     }
 }

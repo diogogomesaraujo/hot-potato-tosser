@@ -1,13 +1,13 @@
 use color_print::cformat;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
+use std::{error::Error, net::SocketAddr};
 use tokio::sync::mpsc;
 
 use crate::log;
 
-pub type HotPotatoTx = mpsc::UnboundedSender<HotPotato>;
-pub type HotPotatoRx = mpsc::UnboundedReceiver<HotPotato>;
+pub type FindHotPotatoStateTx = mpsc::UnboundedSender<FindHotPotato>;
+pub type FindHotPotatoStateRx = mpsc::UnboundedReceiver<FindHotPotato>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartFlag(pub bool);
@@ -15,14 +15,23 @@ pub struct StartFlag(pub bool);
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HotPotato(pub bool);
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum HotPotatoState {
     Holding(HotPotato),
     NotHolding,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum Request {
+pub enum FindHotPotato {
+    Response {
+        hot_potato_state: HotPotatoState,
+        previous_peer_address: SocketAddr,
+    },
+    Request,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum ServerRequest {
     Add(i32, i32),
     Sub(i32, i32),
     Mul(i32, i32),
@@ -30,7 +39,7 @@ pub enum Request {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum Response {
+pub enum ServerResponse {
     Add(i32, i32, i32),
     Sub(i32, i32, i32),
     Mul(i32, i32, i32),
@@ -62,7 +71,27 @@ impl HotPotato {
     }
 }
 
-impl Request {
+impl HotPotatoState {
+    pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::from_str::<Self>(token)?)
+    }
+}
+
+impl FindHotPotato {
+    pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::from_str::<Self>(token)?)
+    }
+}
+
+impl ServerRequest {
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
@@ -71,23 +100,23 @@ impl Request {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 
-    pub fn to_response(&self) -> Response {
+    pub fn to_response(&self) -> ServerResponse {
         match self {
             Self::Add(a, b) => match a.checked_add(*b) {
-                Some(result) => Response::Add(*a, *b, result),
-                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+                Some(result) => ServerResponse::Add(*a, *b, result),
+                None => ServerResponse::Err(*a, *b, cformat!("Failed to compute the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
             },
             Self::Sub(a, b) => match a.checked_sub(*b) {
-                Some(result) => Response::Sub(*a, *b, result),
-                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+                Some(result) => ServerResponse::Sub(*a, *b, result),
+                None => ServerResponse::Err(*a, *b, cformat!("Failed to compute the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
             },
             Self::Mul(a, b) => match a.checked_mul(*b) {
-                Some(result) => Response::Mul(*a, *b, result),
-                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+                Some(result) => ServerResponse::Mul(*a, *b, result),
+                None => ServerResponse::Err(*a, *b, cformat!("Failed to compute the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
             },
             Self::Div(a, b) => match a.checked_div(*b) {
-                Some(result) => Response::Div(*a, *b, result),
-                None => Response::Err(*a, *b, cformat!("Failed to compute the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
+                Some(result) => ServerResponse::Div(*a, *b, result),
+                None => ServerResponse::Err(*a, *b, cformat!("Failed to compute the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
             },
         }
     }
@@ -116,7 +145,7 @@ impl Request {
     }
 }
 
-impl Response {
+impl ServerResponse {
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
@@ -127,11 +156,11 @@ impl Response {
 
     pub fn print(&self) {
         match self {
-            Response::Add(a, b, result) => log::info(&cformat!("The result of the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Response::Sub(a, b, result) => log::info(&cformat!("The result of the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Response::Mul(a, b, result) => log::info(&cformat!("The result of the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Response::Div(a, b, result) => log::info(&cformat!("The result of the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Response::Err(_, _, e) => log::error(e),
+            Self::Add(a, b, result) => log::info(&cformat!("The result of the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Self::Sub(a, b, result) => log::info(&cformat!("The result of the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Self::Mul(a, b, result) => log::info(&cformat!("The result of the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Self::Div(a, b, result) => log::info(&cformat!("The result of the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
+            Self::Err(_, _, e) => log::error(e),
         }
     }
 }
