@@ -4,7 +4,8 @@ use futures::{SinkExt, StreamExt};
 use std::{error::Error, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Barrier, Mutex},
+    sync::{Barrier, Notify, RwLock},
+    time::timeout,
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -12,6 +13,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 pub struct Server {
     pub own_address: String,
     pub number_of_peers: usize,
+    pub timeout_flag: Flag,
 }
 
 impl Server {
@@ -19,14 +21,16 @@ impl Server {
         Self {
             own_address,
             number_of_peers,
+            timeout_flag: Flag::new(false),
         }
     }
 
     async fn handle(
         stream: TcpStream,
-        _server: Arc<Mutex<Self>>,
         barrier: Arc<Barrier>,
-        starts_with_hot_potato: Arc<Mutex<bool>>,
+        starts_with_hot_potato: Flag,
+        notify_timeout: Arc<Notify>,
+        server: Arc<RwLock<Server>>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let lines = Framed::new(stream, LinesCodec::new());
         let (mut writer, mut reader) = lines.split::<String>();
@@ -39,45 +43,71 @@ impl Server {
         writer.flush().await?;
 
         {
-            let mut starts_with_hot_potato = starts_with_hot_potato.lock().await;
-
-            if *starts_with_hot_potato {
+            if starts_with_hot_potato.read().await {
                 log::info(&cformat!(
                     "Sending <yellow, bold>hot potato</yellow, bold> to a peer."
                 ));
-                *starts_with_hot_potato = false;
+                starts_with_hot_potato.write(false).await;
                 writer.send(StartFlag(true).to_json_string()?).await?;
                 writer.flush().await?;
             }
         }
 
         loop {
-            tokio::select! {
-                Some(Ok(line)) = reader.next() => {
-                    match serde_json::from_str::<ServerRequest>(&line) {
-                        Ok(request) => {
-                            let response = request.to_response();
+            match timeout(TIMEOUT_DURATION, reader.next()).await {
+                Ok(Some(Ok(line))) => match serde_json::from_str::<ServerRequest>(&line) {
+                    Ok(request) => {
+                        let response = request.to_response();
 
-                            request.print();
-                            response.print();
+                        request.print();
+                        response.print();
 
-                            writer.send(response.to_json_string()?).await?;
-                        }
-                        Err(_) => {
-                            writer.send(ServerResponse::Err(0, 0, cformat!("The request had <bold>incorrect formatting</bold>.")).to_json_string()?).await?;
-                        }
+                        writer.send(response.to_json_string()?).await?;
                     }
+                    Err(_) => {
+                        writer
+                            .send(
+                                ServerResponse::Err(
+                                    0,
+                                    0,
+                                    cformat!("The request had <bold>incorrect formatting</bold>."),
+                                )
+                                .to_json_string()?,
+                            )
+                            .await?;
+                    }
+                },
+                Ok(None) if !server.read().await.timeout_flag.read().await => {
+                    notify_timeout.notify_one();
+                    return Ok(());
                 }
+                _ => {}
             }
         }
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let listener = TcpListener::bind(&self.own_address).await?;
-        let server = Arc::new(Mutex::new(self.clone()));
+        let server = Arc::new(RwLock::new(self.clone()));
 
         let barrier = Arc::new(Barrier::new(self.number_of_peers));
-        let starts_with_hot_potato = Arc::new(Mutex::new(true));
+        let starts_with_hot_potato = Flag::new(true);
+        let notify_timeout = Arc::new(Notify::new());
+
+        let _throw_potato_on_timeout_thread = {
+            let notify_timeout = notify_timeout.clone();
+            let server = server.clone();
+
+            tokio::spawn(async move {
+                loop {
+                    notify_timeout.notified().await;
+
+                    log::debug("Here should be the logic to send the potato!");
+
+                    server.write().await.timeout_flag.write(false).await;
+                }
+            })
+        };
 
         loop {
             let (peer_stream, _peer_address) = listener.accept().await?;
@@ -87,10 +117,17 @@ impl Server {
             let server = server.clone();
             let barrier = barrier.clone();
             let starts_with_hot_potato = starts_with_hot_potato.clone();
+            let notify_timeout = notify_timeout.clone();
 
             let _handle = tokio::spawn(async move {
-                if let Err(e) =
-                    Self::handle(peer_stream, server, barrier, starts_with_hot_potato).await
+                if let Err(e) = Self::handle(
+                    peer_stream,
+                    barrier,
+                    starts_with_hot_potato,
+                    notify_timeout,
+                    server,
+                )
+                .await
                 {
                     log::error(&format!("{e}"));
                 };
