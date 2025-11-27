@@ -1,35 +1,27 @@
+//! Module that contains all the different message types sent in the network.
+
+use crate::log;
 use color_print::cformat;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, net::SocketAddr};
-use tokio::sync::mpsc;
+use std::error::Error;
 
-use crate::log;
-
-pub type FindHotPotatoStateTx = mpsc::UnboundedSender<FindHotPotato>;
-pub type FindHotPotatoStateRx = mpsc::UnboundedReceiver<FindHotPotato>;
-
+/// Struct that represents the message sent to ensure peers start the token ring after all peers have connected to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartFlag(pub bool);
 
+/// Struct that represents the token sent between peers to ensure mutual exclusion.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HotPotato(pub bool);
 
+/// Enum that tells if a peer is holding the hot potato or not.
 #[derive(Clone, Serialize, Deserialize)]
 pub enum HotPotatoState {
     Holding(HotPotato),
     NotHolding,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub enum FindHotPotato {
-    Response {
-        hot_potato_state: HotPotatoState,
-        previous_peer_address: SocketAddr,
-    },
-    Request,
-}
-
+/// Enum that represents the possible requests a peer can send to the server.
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ServerRequest {
     Add(i32, i32),
@@ -38,6 +30,7 @@ pub enum ServerRequest {
     Div(i32, i32),
 }
 
+/// Enum that represents the possible responses a peer can receive from the server.
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ServerResponse {
     Add(i32, i32, i32),
@@ -48,58 +41,58 @@ pub enum ServerResponse {
 }
 
 impl StartFlag {
+    /// Function that returns the start flag as a JSON formatted `String`.
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
 
+    /// Function that parses the start flag from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 }
 
 impl HotPotato {
+    /// Function that creates a new hot potato.
     pub fn new() -> Self {
         Self(true)
     }
 
+    /// Function that returns the hot potato as a JSON formatted `String`.
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
 
+    /// Function that parses the hot potato from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 }
 
 impl HotPotatoState {
+    /// Function that returns the hot potato state as a JSON formatted `String`.
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
 
-    pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        Ok(serde_json::from_str::<Self>(token)?)
-    }
-}
-
-impl FindHotPotato {
-    pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
-        Ok(serde_json::to_string(self)?)
-    }
-
+    /// Function that parses the hot potato state from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 }
 
 impl ServerRequest {
+    /// Function that returns the server request as a JSON formatted `String`.
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
 
+    /// Function that parses the server request from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 
+    /// Function that computes the response of a request.
     pub fn to_response(&self) -> ServerResponse {
         match self {
             Self::Add(a, b) => match a.checked_add(*b) {
@@ -121,6 +114,7 @@ impl ServerRequest {
         }
     }
 
+    /// Function that prints a request.
     pub fn print(&self) {
         match self {
             Self::Add(a, b) => log::info(&cformat!("Asking the server to perform the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold>.")),
@@ -130,6 +124,7 @@ impl ServerRequest {
         }
     }
 
+    /// Function that generates a request.
     pub fn generate<R: Rng + ?Sized>(rng: &mut R) -> Self {
         let a = rng.random::<i32>();
         let b = rng.random::<i32>();
@@ -146,14 +141,17 @@ impl ServerRequest {
 }
 
 impl ServerResponse {
+    /// Function that returns the server response as a JSON formatted `String`.
     pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::to_string(self)?)
     }
 
+    /// Function that parses the server response from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
     }
 
+    /// Function that prints a response from the server.
     pub fn print(&self) {
         match self {
             Self::Add(a, b, result) => log::info(&cformat!("The result of the <bold>addition</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),

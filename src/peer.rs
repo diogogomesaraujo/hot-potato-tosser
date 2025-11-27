@@ -1,3 +1,5 @@
+//! Module that implements all the building blocks used to create the peer.
+
 use crate::*;
 use futures::{SinkExt, StreamExt};
 use rand::{rng, RngCore};

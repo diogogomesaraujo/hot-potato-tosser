@@ -1,5 +1,5 @@
 [package]
-name = "token_ring"
+name = "hot-potato-tosser"
 version = "0.1.0"
 edition = "2021"
 

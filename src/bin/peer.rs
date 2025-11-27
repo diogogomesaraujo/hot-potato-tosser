@@ -1,6 +1,6 @@
 use clap::Parser;
+use hot_potato_tosser::{log, peer};
 use std::{error::Error, time::Duration};
-use token_ring::{log, peer};
 use tokio::time::sleep;
 
 #[derive(Parser, Debug)]
