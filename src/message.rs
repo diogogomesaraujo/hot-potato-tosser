@@ -10,6 +10,13 @@ use std::error::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartFlag(pub bool);
 
+//
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Addresses {
+    pub own: String,
+    pub next_peer: String,
+}
+
 /// Struct that represents the token sent between peers to ensure mutual exclusion.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HotPotato(pub bool);
@@ -49,6 +56,23 @@ impl StartFlag {
     /// Function that parses the start flag from a JSON formatted `String`.
     pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(serde_json::from_str::<Self>(token)?)
+    }
+}
+
+impl Addresses {
+    /// Function that creates a new addresses message.
+    pub fn new(own: String, next_peer: String) -> Self {
+        Self { own, next_peer }
+    }
+
+    /// Function that returns the addresses state as a JSON formatted `String`.
+    pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    /// Function that parses the addresses state from a JSON formatted `String`.
+    pub fn from_json_string(addresses: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        Ok(serde_json::from_str::<Self>(addresses)?)
     }
 }
 

@@ -56,6 +56,8 @@ impl Peer {
                         "Currently holding <yellow, bold>hot potato</yellow, bold>"
                     )); */
                 }
+            } else {
+                return Err("Couldn't receive hot potato from previous peer.".into());
             }
         }
     }
@@ -81,6 +83,25 @@ impl Peer {
                 return;
             }
         };
+
+        //send addresses
+        if let Err(_) = server_lines
+            .send(
+                match Addresses::new(self.address.clone(), self.next_peer_address.clone())
+                    .to_json_string()
+                {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        log::error("Couldn't parse the addresses to send to the server.");
+                        return;
+                    }
+                },
+            )
+            .await
+        {
+            log::error("Couldn't send addresses to the server.");
+            return;
+        }
 
         // receive starting flag
         let _ = match server_lines.next().await {
@@ -142,60 +163,66 @@ impl Peer {
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
 
             tokio::spawn(async move {
-                let (previous_peer_stream, _previous_peer_address) = previous_peer_listener
-                    .accept()
-                    .await
-                    .expect("Failed to accept the previous peer's connection.");
+                loop {
+                    let (previous_peer_stream, _previous_peer_address) =
+                        match previous_peer_listener.accept().await {
+                            Ok(connection) => connection,
+                            Err(_) => continue,
+                        };
 
-                if let Err(e) = Self::handle_previous_peer(
-                    previous_peer_stream,
-                    current_peer,
-                    holding_hot_potato_notify,
-                )
-                .await
-                {
-                    log::error(&format!("{e}"));
-                };
+                    if let Err(e) = Self::handle_previous_peer(
+                        previous_peer_stream,
+                        current_peer.clone(),
+                        holding_hot_potato_notify.clone(),
+                    )
+                    .await
+                    {
+                        log::error(&format!("{e}"));
+                    };
+                }
             })
         };
 
         let calc_then_throw_hot_potato_thread = {
             let current_peer = Arc::clone(&current_peer);
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
-
             let mut next_peer_lines = Framed::new(next_peer_stream, LinesCodec::new());
 
             tokio::spawn(async move {
                 loop {
                     holding_hot_potato_notify.notified().await;
-                    {
-                        let mut current_peer = current_peer.lock().await;
-                        if let HotPotatoState::Holding(hot_potato) = &current_peer.hot_potato_state
-                        {
-                            if let Ok(hot_potato_string) = hot_potato.to_json_string() {
-                                // send all operations request to server
-                                while let Some(operation_request) =
-                                    current_peer.request_queue.pop_front()
-                                {
-                                    operation_request.print();
-                                    server_writer
-                                        .send(
-                                            operation_request
-                                                .to_json_string()
-                                                .expect("Couldn't parse operation request."),
-                                        )
-                                        .await
-                                        .expect("Couldn't send operation request to server.");
-                                }
 
-                                // sleep(Duration::from_secs(2)).await;
-                                next_peer_lines
-                                    .send(hot_potato_string)
-                                    .await
-                                    .expect("Couldn't send hot potato to next peer.");
+                    let (hot_potato_string, has_requests) = {
+                        let mut current_peer = current_peer.lock().await;
+
+                        let hot_potato_string = match &current_peer.hot_potato_state {
+                            HotPotatoState::Holding(hot_potato) => hot_potato.to_json_string().ok(),
+                            _ => None,
+                        };
+
+                        let has_requests = !current_peer.request_queue.is_empty();
+
+                        // Send all operations request to server
+                        while let Some(operation_request) = current_peer.request_queue.pop_front() {
+                            operation_request.print();
+                            if let Err(_) = server_writer
+                                .send(operation_request.to_json_string().unwrap_or("".to_string()))
+                                .await
+                            {
+                                log::error("Couldn't send operation request to server.");
                             }
                         }
+
                         current_peer.hot_potato_state = HotPotatoState::NotHolding;
+
+                        (hot_potato_string, has_requests)
+                    }; // Lock released here
+
+                    // Send hot potato after releasing lock
+                    if let Some(potato_str) = hot_potato_string {
+                        if let Err(_) = next_peer_lines.send(potato_str).await {
+                            log::error("Couldn't send hot potato to next peer.");
+                        }
                     }
                 }
             })
@@ -224,17 +251,13 @@ impl Peer {
             })
         };
 
-        if let Err(_) = operation_server_thread.await {
-            log::error("Operation Server Thread failded.");
-        }
-        if let Err(_) = previous_peer_thread.await {
-            log::error("Previous Peer Thread failded.");
-        }
-        if let Err(_) = calc_then_throw_hot_potato_thread.await {
-            log::error("Calculate then Throw Hot Potato Thread failded.");
-        }
-        if let Err(_) = generate_potato_work_thread.await {
-            log::error("Generate Potato Work Thread failded.");
+        if let Err(_) = tokio::try_join!(
+            operation_server_thread,
+            previous_peer_thread,
+            calc_then_throw_hot_potato_thread,
+            generate_potato_work_thread
+        ) {
+            log::error("Couldn't close all threads");
         }
     }
 }
