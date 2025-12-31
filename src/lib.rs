@@ -44,6 +44,6 @@ pub mod server;
 pub mod sync;
 
 /// Constant value for the rate used in the Poisson distribution.
-pub const RATE: f64 = 1.;
+pub const RATE: f64 = 2.;
 
 pub const TIMEOUT_DURATION: Duration = Duration::from_secs(1);

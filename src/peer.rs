@@ -82,6 +82,18 @@ impl Peer {
             }
         };
 
+        if let Err(_) = server_lines
+            .send(
+                Addresses::new(self.address.clone(), self.next_peer_address.clone())
+                    .to_json_string()
+                    .unwrap(),
+            )
+            .await
+        {
+            log::error("Couldn't send the addresses to the server");
+            return;
+        };
+
         // receive starting flag
         let _ = match server_lines.next().await {
             Some(Ok(line))
@@ -118,6 +130,7 @@ impl Peer {
                 loop {
                     if let Some(Ok(msg)) = server_reader.next().await {
                         if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
+                            println!("iewnvineiwvienviwenv");
                             let mut current_peer = current_peer.lock().await;
 
                             current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
@@ -189,10 +202,9 @@ impl Peer {
                                 }
 
                                 // sleep(Duration::from_secs(2)).await;
-                                next_peer_lines
-                                    .send(hot_potato_string)
-                                    .await
-                                    .expect("Couldn't send hot potato to next peer.");
+                                if let Err(_) = next_peer_lines.send(hot_potato_string).await {
+                                    continue;
+                                }
                             }
                         }
                         current_peer.hot_potato_state = HotPotatoState::NotHolding;
