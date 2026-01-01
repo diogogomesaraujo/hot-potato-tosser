@@ -7,7 +7,7 @@ use std::{collections::VecDeque, error::Error, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify, RwLock},
-    time::{sleep, timeout},
+    time::sleep,
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -118,15 +118,6 @@ impl Peer {
         // create a thread-safe state instance
         let current_peer = Arc::new(Mutex::new(self.clone()));
 
-        // connect to the next Peer's server
-        let next_peer_stream = match TcpStream::connect(&self.next_peer_address).await {
-            Ok(stream) => stream,
-            Err(_) => {
-                log::error("Couldn't connect to the next peer.");
-                return;
-            }
-        };
-
         let holding_hot_potato_notify = Arc::new(Notify::new());
         let previous_peer_lost_potato_notify = Arc::new(Notify::new());
         let (server_writer, mut server_reader) = server_lines.split::<String>();
@@ -201,43 +192,58 @@ impl Peer {
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
             let previous_peer_lost_potato_notify = previous_peer_lost_potato_notify.clone();
 
-            let mut next_peer_lines = Framed::new(next_peer_stream, LinesCodec::new());
             let server_writer = server_writer.clone();
 
             tokio::spawn(async move {
                 loop {
-                    holding_hot_potato_notify.notified().await;
-                    {
-                        let mut current_peer = current_peer.lock().await;
-                        if let HotPotatoState::Holding(hot_potato) = &current_peer.hot_potato_state
-                        {
-                            if let Ok(hot_potato_string) = hot_potato.to_json_string() {
-                                // send all operations request to server
-                                while let Some(operation_request) =
-                                    current_peer.request_queue.pop_front()
-                                {
-                                    operation_request.print();
-                                    server_writer
-                                        .write()
-                                        .await
-                                        .send(
-                                            operation_request
-                                                .to_json_string()
-                                                .expect("Couldn't parse operation request."),
-                                        )
-                                        .await
-                                        .expect("Couldn't send operation request to server.");
-                                }
+                    let next_peer_address = { current_peer.lock().await.next_peer_address.clone() };
 
-                                // sleep(Duration::from_secs(2)).await;
-                                if let Err(_) = next_peer_lines.send(hot_potato_string).await {
-                                    // log::error("Couldn't send potato to next peer.");
-                                    previous_peer_lost_potato_notify.notify_one();
-                                    continue;
+                    // connect to the next Peer's server
+                    let next_peer_stream = match TcpStream::connect(next_peer_address).await {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            log::error("Couldn't connect to the next peer.");
+                            return;
+                        }
+                    };
+
+                    let mut next_peer_lines = Framed::new(next_peer_stream, LinesCodec::new());
+
+                    loop {
+                        holding_hot_potato_notify.notified().await;
+                        {
+                            let mut current_peer = current_peer.lock().await;
+                            if let HotPotatoState::Holding(hot_potato) =
+                                &current_peer.hot_potato_state
+                            {
+                                if let Ok(hot_potato_string) = hot_potato.to_json_string() {
+                                    // send all operations request to server
+                                    while let Some(operation_request) =
+                                        current_peer.request_queue.pop_front()
+                                    {
+                                        operation_request.print();
+                                        server_writer
+                                            .write()
+                                            .await
+                                            .send(
+                                                operation_request
+                                                    .to_json_string()
+                                                    .expect("Couldn't parse operation request."),
+                                            )
+                                            .await
+                                            .expect("Couldn't send operation request to server.");
+                                    }
+
+                                    // sleep(Duration::from_secs(2)).await;
+                                    if let Err(_) = next_peer_lines.send(hot_potato_string).await {
+                                        // log::error("Couldn't send potato to next peer.");
+                                        previous_peer_lost_potato_notify.notify_one();
+                                        continue;
+                                    }
                                 }
                             }
+                            current_peer.hot_potato_state = HotPotatoState::NotHolding;
                         }
-                        current_peer.hot_potato_state = HotPotatoState::NotHolding;
                     }
                 }
             })
