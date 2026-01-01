@@ -130,15 +130,14 @@ impl Peer {
                 loop {
                     if let Some(Ok(msg)) = server_reader.next().await {
                         if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
-                            println!("iewnvineiwvienviwenv");
                             let mut current_peer = current_peer.lock().await;
 
                             current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
                             holding_hot_potato_notify.notify_one();
 
-                            /*log::debug(&cformat!(
+                            log::debug(&color_print::cformat!(
                                 "Currently holding <yellow, bold>hot potato</yellow, bold>"
-                            ));*/
+                            ));
                         }
 
                         if let Ok(operation_response) = ServerResponse::from_json_string(&msg) {
@@ -203,6 +202,7 @@ impl Peer {
 
                                 // sleep(Duration::from_secs(2)).await;
                                 if let Err(_) = next_peer_lines.send(hot_potato_string).await {
+                                    log::error("Couldn't send message.");
                                     continue;
                                 }
                             }
