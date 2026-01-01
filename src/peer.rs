@@ -6,8 +6,8 @@ use rand::{rng, RngCore};
 use std::{collections::VecDeque, error::Error, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex, Notify},
-    time::sleep,
+    sync::{Mutex, Notify, RwLock},
+    time::{sleep, timeout},
 };
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -37,24 +37,33 @@ impl Peer {
 
     pub async fn handle_previous_peer(
         previous_peer_stream: TcpStream,
-        current_peer_server: Arc<Mutex<Self>>,
-        holding_hot_potato_notify: Arc<Notify>,
+        current_peer_server: &Arc<Mutex<Self>>,
+        holding_hot_potato_notify: &Arc<Notify>,
+        previous_peer_notify: &Arc<Notify>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut previous_peer_lines = Framed::new(previous_peer_stream, LinesCodec::new());
 
         loop {
-            if let Some(Ok(hot_potato_string)) = previous_peer_lines.next().await {
-                if let Ok(hot_potato) = HotPotato::from_json_string(&hot_potato_string) {
-                    // get hold of hot potato
-                    {
-                        let mut current_peer_server = current_peer_server.lock().await;
-                        current_peer_server.hot_potato_state = HotPotatoState::Holding(hot_potato);
-                        holding_hot_potato_notify.notify_one();
-                    }
+            match previous_peer_lines.next().await {
+                Some(Ok(hot_potato_string)) => {
+                    if let Ok(hot_potato) = HotPotato::from_json_string(&hot_potato_string) {
+                        // get hold of hot potato
+                        {
+                            let mut current_peer_server = current_peer_server.lock().await;
+                            current_peer_server.hot_potato_state =
+                                HotPotatoState::Holding(hot_potato);
+                            holding_hot_potato_notify.notify_one();
+                        }
 
-                    /*log::debug(&cformat!(
-                        "Currently holding <yellow, bold>hot potato</yellow, bold>"
-                    )); */
+                        /*log::debug(&cformat!(
+                            "Currently holding <yellow, bold>hot potato</yellow, bold>"
+                        )); */
+                    }
+                }
+                _ => {
+                    log::error("Couldn't receive the hot potato from previous peer");
+                    previous_peer_notify.notify_waiters();
+                    return Err("".into());
                 }
             }
         }
@@ -82,6 +91,18 @@ impl Peer {
             }
         };
 
+        if let Err(_) = server_lines
+            .send(
+                Addresses::new(self.address.clone(), self.next_peer_address.clone())
+                    .to_json_string()
+                    .unwrap(),
+            )
+            .await
+        {
+            log::error("Couldn't send the addresses to the server");
+            return;
+        };
+
         // receive starting flag
         let _ = match server_lines.next().await {
             Some(Ok(line))
@@ -107,29 +128,41 @@ impl Peer {
         };
 
         let holding_hot_potato_notify = Arc::new(Notify::new());
-        let (mut server_writer, mut server_reader) = server_lines.split::<String>();
+        let previous_peer_lost_potato_notify = Arc::new(Notify::new());
+        let (server_writer, mut server_reader) = server_lines.split::<String>();
+
+        let server_writer = Arc::new(RwLock::new(server_writer));
 
         // thread that handles the server connection
         let operation_server_thread = {
             let current_peer = Arc::clone(&current_peer);
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
+            let previous_peer_lost_potato_notify = previous_peer_lost_potato_notify.clone();
+            let server_writer = server_writer.clone();
 
             tokio::spawn(async move {
                 loop {
-                    if let Some(Ok(msg)) = server_reader.next().await {
-                        if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
-                            let mut current_peer = current_peer.lock().await;
+                    tokio::select! {
+                        Some(Ok(msg)) = server_reader.next() => {
+                            if let Ok(hot_potato) = HotPotato::from_json_string(&msg) {
+                                let mut current_peer = current_peer.lock().await;
 
-                            current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
-                            holding_hot_potato_notify.notify_one();
+                                current_peer.hot_potato_state = HotPotatoState::Holding(hot_potato);
+                                holding_hot_potato_notify.notify_one();
 
-                            /*log::debug(&cformat!(
-                                "Currently holding <yellow, bold>hot potato</yellow, bold>"
-                            ));*/
+                                /*log::debug(&cformat!(
+                                    "Currently holding <yellow, bold>hot potato</yellow, bold>"
+                                ));*/
+                            }
+
+                            if let Ok(operation_response) = ServerResponse::from_json_string(&msg) {
+                                operation_response.print();
+                            }
                         }
-
-                        if let Ok(operation_response) = ServerResponse::from_json_string(&msg) {
-                            operation_response.print();
+                        () = previous_peer_lost_potato_notify.notified() => {
+                            if let Err(_) = server_writer.write().await.send(RedistributeHotPotato().to_json_string().unwrap()).await {
+                                log::error("Couldn't send the request for new hot potato to the server.");
+                            }
                         }
                     }
                 }
@@ -140,30 +173,36 @@ impl Peer {
         let previous_peer_thread = {
             let current_peer = Arc::clone(&current_peer);
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
+            let previous_peer_lost_potato_notify = previous_peer_lost_potato_notify.clone();
 
             tokio::spawn(async move {
-                let (previous_peer_stream, _previous_peer_address) = previous_peer_listener
-                    .accept()
-                    .await
-                    .expect("Failed to accept the previous peer's connection.");
+                loop {
+                    let (previous_peer_stream, _previous_peer_address) = previous_peer_listener
+                        .accept()
+                        .await
+                        .expect("Failed to accept the previous peer's connection.");
 
-                if let Err(e) = Self::handle_previous_peer(
-                    previous_peer_stream,
-                    current_peer,
-                    holding_hot_potato_notify,
-                )
-                .await
-                {
-                    log::error(&format!("{e}"));
-                };
+                    if let Err(_) = Self::handle_previous_peer(
+                        previous_peer_stream,
+                        &current_peer,
+                        &holding_hot_potato_notify,
+                        &previous_peer_lost_potato_notify,
+                    )
+                    .await
+                    {
+                        continue;
+                    };
+                }
             })
         };
 
         let calc_then_throw_hot_potato_thread = {
             let current_peer = Arc::clone(&current_peer);
             let holding_hot_potato_notify = holding_hot_potato_notify.clone();
+            let previous_peer_lost_potato_notify = previous_peer_lost_potato_notify.clone();
 
             let mut next_peer_lines = Framed::new(next_peer_stream, LinesCodec::new());
+            let server_writer = server_writer.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -179,6 +218,8 @@ impl Peer {
                                 {
                                     operation_request.print();
                                     server_writer
+                                        .write()
+                                        .await
                                         .send(
                                             operation_request
                                                 .to_json_string()
@@ -189,10 +230,11 @@ impl Peer {
                                 }
 
                                 // sleep(Duration::from_secs(2)).await;
-                                next_peer_lines
-                                    .send(hot_potato_string)
-                                    .await
-                                    .expect("Couldn't send hot potato to next peer.");
+                                if let Err(_) = next_peer_lines.send(hot_potato_string).await {
+                                    // log::error("Couldn't send potato to next peer.");
+                                    previous_peer_lost_potato_notify.notify_one();
+                                    continue;
+                                }
                             }
                         }
                         current_peer.hot_potato_state = HotPotatoState::NotHolding;
