@@ -6,12 +6,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Addresses {
-    pub own_address: String,
-    pub peer_address: String,
-}
-
 /// Struct that represents the message sent to ensure peers start the token ring after all peers have connected to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartFlag(pub bool);
@@ -47,23 +41,6 @@ pub enum ServerResponse {
     Mul(i32, i32, i32),
     Div(i32, i32, i32),
     Err(i32, i32, String),
-}
-
-impl Addresses {
-    pub fn new(own_address: String, peer_address: String) -> Self {
-        Self {
-            own_address,
-            peer_address,
-        }
-    }
-
-    pub fn to_json_string(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
-        Ok(serde_json::to_string(self)?)
-    }
-
-    pub fn from_json_string(token: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        Ok(serde_json::from_str::<Self>(token)?)
-    }
 }
 
 impl RedistributeHotPotato {
@@ -194,7 +171,7 @@ impl ServerResponse {
             Self::Sub(a, b, result) => log::info(&cformat!("The result of the <bold>subtraction</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
             Self::Mul(a, b, result) => log::info(&cformat!("The result of the <bold>multiplication</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
             Self::Div(a, b, result) => log::info(&cformat!("The result of the <bold>division</bold> of <bold>{a}</bold> and <bold>{b}</bold> is <bold>{result}</bold>.")),
-            Self::Err(_, _, e) => log::error(e),
+            Self::Err(_, _, e) => log::warning(e),
         }
     }
 }

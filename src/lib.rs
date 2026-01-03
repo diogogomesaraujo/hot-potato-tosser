@@ -30,6 +30,8 @@
 //! - **EXTRA MARKS:** implement a scheme that enables the token to continue to move
 //! in the event of a failure in one of the peers.
 
+use std::time::Duration;
+
 use crate::message::*;
 use crate::poisson::*;
 
@@ -42,3 +44,5 @@ pub mod sync;
 
 /// Constant value for the rate used in the Poisson distribution.
 pub const RATE: f64 = 1.;
+
+pub const WAIT: Duration = Duration::from_secs(2);

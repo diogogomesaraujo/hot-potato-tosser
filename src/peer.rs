@@ -61,7 +61,7 @@ impl Peer {
                     }
                 }
                 _ => {
-                    log::error("Couldn't receive the hot potato from previous peer");
+                    log::error("Couldn't receive the hot potato from previous peer.");
                     previous_peer_notify.notify_waiters();
                     return Err("".into());
                 }
@@ -91,25 +91,16 @@ impl Peer {
             }
         };
 
-        if let Err(_) = server_lines
-            .send(
-                Addresses::new(self.address.clone(), self.next_peer_address.clone())
-                    .to_json_string()
-                    .unwrap(),
-            )
-            .await
-        {
-            log::error("Couldn't send the addresses to the server");
-            return;
-        };
-
         // receive starting flag
         let _ = match server_lines.next().await {
             Some(Ok(line))
                 if matches!(
                     StartFlag::from_json_string(&line).expect("(StartFlag) Shouldn't fail."),
                     StartFlag(_)
-                ) => {}
+                ) =>
+            {
+                log::info("Received authorization from the server to start the protocol.");
+            }
             _ => {
                 log::error("Couldn't receive the starting flag from the server.");
             }
@@ -173,6 +164,8 @@ impl Peer {
                         .await
                         .expect("Failed to accept the previous peer's connection.");
 
+                    log::warning("Successfully connected to previous peer.");
+
                     if let Err(_) = Self::handle_previous_peer(
                         previous_peer_stream,
                         &current_peer,
@@ -198,16 +191,20 @@ impl Peer {
                 loop {
                     let next_peer_address = { current_peer.lock().await.next_peer_address.clone() };
 
+                    log::debug("Trying to connect to next peer.");
+
                     // connect to the next Peer's server
                     let next_peer_stream = match TcpStream::connect(next_peer_address).await {
                         Ok(stream) => stream,
                         Err(_) => {
                             log::error("Couldn't connect to the next peer.");
-                            return;
+                            continue;
                         }
                     };
 
                     let mut next_peer_lines = Framed::new(next_peer_stream, LinesCodec::new());
+
+                    log::warning("Successfully connected to next peer.");
 
                     loop {
                         holding_hot_potato_notify.notified().await;
@@ -238,7 +235,6 @@ impl Peer {
                                     if let Err(_) = next_peer_lines.send(hot_potato_string).await {
                                         // log::error("Couldn't send potato to next peer.");
                                         previous_peer_lost_potato_notify.notify_one();
-                                        continue;
                                     }
                                 }
                             }
