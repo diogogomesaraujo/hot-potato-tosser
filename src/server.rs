@@ -1,7 +1,7 @@
 use crate::{sync::Flag, *};
 use color_print::cformat;
 use futures::{SinkExt, StreamExt};
-use std::{collections::HashMap, error::Error, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
